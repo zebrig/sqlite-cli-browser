@@ -29,8 +29,8 @@ Version: 0.1.0
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/zebrig/sqlite-cli-browser.git
-    cd sqlite-cli-browser
+    git clone https://github.com/zebrig/sqlite_browser.git
+    cd sqlite_browser
     chmod 755 sqlite_browser.py
     ```
     
