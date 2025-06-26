@@ -4,7 +4,7 @@ Lightweight curses-based SQLite database browser for viewing, editing, and delet
 
 Author: Yahor Zaleski
 License: MIT
-Repository: https://github.com/zebrig/sqlite-cli-browser.git
+Repository: https://github.com/zebrig/sqlite_browser.git
 
 Usage:
     python3 sqlite_browser.py [path/to/database.db]
@@ -146,8 +146,11 @@ def table_menu(stdscr, conn):
                 attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
                 line = f"{name:{col1}}  {rows_vals[i]:>{col2}}  {size_vals[i]:>{col3}}"
                 stdscr.addstr(y, 2, line[:w-4], attr)
-        help_str = "Up/Down: Navigate  Enter: Select  v: Toggle view  i: Schema  w: Wrap  s: SQL  q: Quit"
-        stdscr.addstr(h-1, 0, help_str[:w])
+        help_str = "Up/Down: Navigate  Enter: Select  v: Toggle view  i: Schema  s: SQL query  q: Quit"
+        try:
+            stdscr.addstr(h-1, 0, help_str[:w])
+        except curses.error:
+            pass
         stdscr.refresh()
         key = stdscr.getch()
         if key in (ord('i'),):
@@ -187,9 +190,13 @@ def view_table(stdscr, conn, table):
         title = f"Table: {table} ({len(rows)} rows)"
         stdscr.addstr(0, 0, title[:w])
         hdr = ' | '.join(cols)
-        stdscr.addstr(1, 0, hdr[:w], curses.A_UNDERLINE)
+        # Header (wrap column names when wrapping enabled)
+        header_lines = textwrap.wrap(hdr, w) if wrap else [hdr]
+        for i, hline in enumerate(header_lines):
+            stdscr.addstr(1 + i, 0, hline[:w], curses.A_UNDERLINE)
+        # Rows
         if not wrap:
-            visible = h - 4
+            visible = h - 3 - len(header_lines)
             for i in range(visible):
                 ridx = start + i
                 if ridx >= len(rows):
@@ -197,10 +204,10 @@ def view_table(stdscr, conn, table):
                 row = rows[ridx]
                 line = ' | '.join(str(x) for x in row)
                 attr = curses.A_REVERSE if ridx == idx else curses.A_NORMAL
-                stdscr.addstr(i+2, 0, line[:w], attr)
+                stdscr.addstr(1 + len(header_lines) + i, 0, line[:w], attr)
         else:
             # wrap mode: display rows starting at 'start', wrapping long lines
-            y = 2
+            y = 1 + len(header_lines)
             for ridx in range(start, len(rows)):
                 if y >= h-1:
                     break
@@ -213,9 +220,11 @@ def view_table(stdscr, conn, table):
                     attr = curses.A_REVERSE if ridx == idx else curses.A_NORMAL
                     stdscr.addstr(y, 0, part, attr)
                     y += 1
-        stdscr.addstr(h-1, 0,
-            "Up/Down: Navigate  e: Edit  d: Delete  r: Reload  "
-            + "i: Schema  w: Wrap  s: SQL  b/q: Back")
+        help_str = "Up/Down: Navigate  e: Edit  d: Delete  r: Reload  i: Schema  w: Wrap  s: SQL  b/q: Back"
+        try:
+            stdscr.addstr(h-1, 0, help_str[:w])
+        except curses.error:
+            pass
         stdscr.refresh()
         key = stdscr.getch()
 
@@ -276,143 +285,113 @@ def confirm(stdscr, message):
     return key in (ord('y'), ord('Y'))
 
 def view_schema(stdscr, conn, table):
+    h, w = stdscr.getmaxyx()
     encoding = conn.execute("PRAGMA encoding").fetchone()[0]
-    # Fetch original CREATE TABLE DDL
     try:
         ddl = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).fetchone()[0] or ''
     except Exception:
         ddl = ''
-    # Fetch columns, including hidden if supported
     try:
         cols_info = conn.execute(f"PRAGMA table_xinfo('{table}')").fetchall()
-        have_hidden = True
+        hidden_col = True
     except sqlite3.DatabaseError:
         cols_info = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
-        have_hidden = False
-    # Prepare column metadata rows
-    schema_rows = []
+        hidden_col = False
+    headers = ['Name', 'Type', 'Limit', 'Not Null', 'Default', 'PK']
+    if hidden_col:
+        headers.append('Hidden')
+    rows = []
+    rows.append((f"Schema: {table} (encoding: {encoding})", curses.A_BOLD))
+    rows.append(("", 0))
+    for line in textwrap.wrap(ddl, w):
+        rows.append((line, 0))
+    rows.append(("", 0))
+    col_widths = [len(h) for h in headers]
+    data = []
     for ci in cols_info:
         name = ci['name']
-        col_type = ci['type'] or ''
-        m = re.search(r"\((\d+)\)", col_type)
+        typ = ci['type'] or ''
+        m = re.search(r"\((\d+)\)", typ)
         limit = m.group(1) if m else ''
         notnull = 'YES' if ci['notnull'] else 'NO'
         default = ci['dflt_value'] or ''
         pk = str(ci['pk']) if ci['pk'] else ''
-        if have_hidden:
-            hidden = 'YES' if ci['hidden'] else 'NO'
-            schema_rows.append((name, col_type, limit, notnull, default, pk, hidden))
-        else:
-            schema_rows.append((name, col_type, limit, notnull, default, pk))
-    # Display
-    stdscr.clear()
-    h, w = stdscr.getmaxyx()
-    stdscr.addstr(0, 0, f"Schema: {table} (encoding: {encoding})", curses.A_BOLD)
-    # DDL
-    y = 1
-    for line in textwrap.wrap(ddl, w):
-        if y >= h - 1:
-            break
-        stdscr.addstr(y, 0, line)
-        y += 1
-    # Table headers
-    headers = ['Name', 'Type', 'Limit', 'Not Null', 'Default', 'PK']
-    if have_hidden:
-        headers.append('Hidden')
-    col_widths = [len(hdr) for hdr in headers]
-    for row in schema_rows:
+        hidden = 'YES' if hidden_col and ci['hidden'] else ''
+        row = [name, typ, limit, notnull, default, pk]
+        if hidden_col:
+            row.append(hidden)
+        data.append(row)
         for i, cell in enumerate(row):
             col_widths[i] = max(col_widths[i], len(str(cell)))
-    xs = [0]
-    for cw in col_widths:
-        xs.append(xs[-1] + cw + 2)
-    y0 = y + 1
-    for i, hdr in enumerate(headers):
-        stdscr.addstr(y0, xs[i], hdr.ljust(col_widths[i]), curses.A_UNDERLINE)
-    # Column rows
-    for ridx, row in enumerate(schema_rows):
-        yy = y0 + 1 + ridx
-        if yy >= h - 1:
-            break
-        for i, cell in enumerate(row):
-            stdscr.addstr(yy, xs[i], str(cell).ljust(col_widths[i]))
-    # Indices
-    idx_y = y0 + 1 + len(schema_rows) + 1
-    if idx_y < h - 1:
-        stdscr.addstr(idx_y, 0, "Indices:", curses.A_UNDERLINE)
-        idx_y += 1
-        for idxinfo in conn.execute(f"PRAGMA index_list('{table}')"):
-            if idx_y >= h - 1:
-                break
-            name = idxinfo['name']
-            unique = 'YES' if idxinfo['unique'] else 'NO'
-            cols = [r['name'] for r in conn.execute(f"PRAGMA index_info('{name}')")]
-            text = f"{name} (unique: {unique}) columns: {', '.join(cols)}"
-            for part in textwrap.wrap(text, w-2):
-                if idx_y >= h - 1:
-                    break
-                stdscr.addstr(idx_y, 2, part)
-                idx_y += 1
-    # Foreign keys
-    fk_y = idx_y + 1
-    if fk_y < h - 1:
-        stdscr.addstr(fk_y, 0, "Foreign keys:", curses.A_UNDERLINE)
-        fk_y += 1
-        for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
-            if fk_y >= h - 1:
-                break
-            text = (
-                f"{fk['table']}({fk['to']}) <- {fk['from']} "
-                f"on_update={fk['on_update']} on_delete={fk['on_delete']}"
-            )
-            for part in textwrap.wrap(text, w-2):
-                if fk_y >= h - 1:
-                    break
-                stdscr.addstr(fk_y, 2, part)
-                fk_y += 1
-    # Row count and size
-    stat_y = fk_y + 1
-    if stat_y < h - 1:
-        count = conn.execute(f"SELECT COUNT(*) FROM '{table}'").fetchone()[0]
-        size = None
+    hdr_line = '  '.join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    rows.append((hdr_line, curses.A_UNDERLINE))
+    for rec in data:
+        line = '  '.join(str(rec[i]).ljust(col_widths[i]) for i in range(len(rec)))
+        rows.append((line, 0))
+    rows.append(("", 0))
+    rows.append(("Indices:", curses.A_UNDERLINE))
+    for info in conn.execute(f"PRAGMA index_list('{table}')"):
+        name = info['name']; uniq = 'YES' if info['unique'] else 'NO'
+        cols = [r['name'] for r in conn.execute(f"PRAGMA index_info('{name}')")]
+        text = f"{name} (unique: {uniq}) columns: {', '.join(cols)}"
+        for part in textwrap.wrap(text, w-2):
+            rows.append((f"  {part}", 0))
+    rows.append(("", 0))
+    rows.append(("Foreign keys:", curses.A_UNDERLINE))
+    for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')"):
+        txt = (f"{fk['table']}({fk['to']}) <- {fk['from']} "
+               f"on_update={fk['on_update']} on_delete={fk['on_delete']}")
+        for part in textwrap.wrap(txt, w-2):
+            rows.append((f"  {part}", 0))
+    rows.append(("", 0))
+    cnt = conn.execute(f"SELECT COUNT(*) FROM '{table}'").fetchone()[0]
+    sz = None
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS dbstat USING dbstat")
+        sz = conn.execute("SELECT SUM(pgsize) FROM dbstat WHERE name=?", (table,)).fetchone()[0]
+    except sqlite3.DatabaseError:
+        pass
+    stat = f"Rows: {cnt}"
+    if sz is not None:
+        if sz >= 1024*1024:
+            stat += f", Size: {sz/1024/1024:.1f}MB"
+        elif sz >= 1024:
+            stat += f", Size: {sz/1024:.1f}KB"
+        else:
+            stat += f", Size: {sz}B"
+    rows.append((stat, 0))
+    rows.append(("", 0))
+    rows.append(("Triggers:", curses.A_UNDERLINE))
+    for trig in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)):
+        ln = f"{trig['name']}: {trig['sql'] or ''}"
+        for part in textwrap.wrap(ln, w-2):
+            rows.append((f"  {part}", 0))
+
+    h, w = stdscr.getmaxyx()
+    pad = curses.newpad(len(rows)+1, w)
+    for i, (text, attr) in enumerate(rows):
         try:
-            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS dbstat USING dbstat")
-            size = conn.execute(
-                "SELECT SUM(pgsize) FROM dbstat WHERE name=?", (table,)
-            ).fetchone()[0]
-        except sqlite3.DatabaseError:
-            size = None
-        stats = f"Rows: {count}"
-        if size is not None:
-            if size >= 1024*1024:
-                stats += f", Size: {size/1024/1024:.1f}MB"
-            elif size >= 1024:
-                stats += f", Size: {size/1024:.1f}KB"
-            else:
-                stats += f", Size: {size}B"
-        stdscr.addstr(stat_y, 0, stats[:w])
-    # Triggers
-    trg_y = stat_y + 1
-    if trg_y < h - 1:
-        stdscr.addstr(trg_y, 0, "Triggers:", curses.A_UNDERLINE)
-        trg_y += 1
-        for trig in conn.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)
-        ):
-            if trg_y >= h - 1:
-                break
-            line = trig['name'] + ": " + (trig['sql'] or '')
-            for part in textwrap.wrap(line, w-2):
-                if trg_y >= h - 1:
-                    break
-                stdscr.addstr(trg_y, 2, part)
-                trg_y += 1
-    # Footer
-    stdscr.addstr(h-1, 0, "Press any key to return", curses.A_DIM)
-    stdscr.refresh()
-    stdscr.getch()
+            pad.addnstr(i, 0, text, w-1, attr)
+        except curses.error:
+            pass
+    pos = 0
+    while True:
+        pad.refresh(pos, 0, 0, 0, h-2, w-1)
+        footer = "Up/Down: Scroll  b/q/ESC: Back"
+        try:
+            stdscr.addnstr(h-1, 0, footer, w-1, curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (curses.KEY_DOWN, ord('j')) and pos < len(rows) - (h-1):
+            pos += 1
+        elif key in (curses.KEY_UP, ord('k')) and pos > 0:
+            pos -= 1
+        elif key in (ord('b'), ord('q'), 27):
+            break
 
 
 def edit_row(conn, table, cols, row, rowid):
