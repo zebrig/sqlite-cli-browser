@@ -305,8 +305,31 @@ def view_schema(stdscr, conn, table):
     rows = []
     rows.append((f"Schema: {table} (encoding: {encoding})", curses.A_BOLD))
     rows.append(("", 0))
-    for line in textwrap.wrap(ddl, w):
-        rows.append((line, 0))
+    # Pretty-print CREATE TABLE DDL
+    m = re.match(r'^(CREATE TABLE.*?\()(.*)(\).*)$', ddl, flags=re.IGNORECASE|re.DOTALL)
+    if m:
+        pre, body, post = m.group(1), m.group(2), m.group(3)
+        rows.append((pre, 0))
+        parts, buf, depth = [], [], 0
+        for ch in body:
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            if ch == ',' and depth == 0:
+                parts.append(''.join(buf)); buf = []
+            else:
+                buf.append(ch)
+        if buf:
+            parts.append(''.join(buf))
+        for i, part in enumerate(parts):
+            chunk = part.strip() + (',' if i < len(parts)-1 else '')
+            for wline in textwrap.wrap(chunk, w-4):
+                rows.append(('    ' + wline, 0))
+        rows.append((post, 0))
+    else:
+        for line in textwrap.wrap(ddl, w):
+            rows.append((line, 0))
     rows.append(("", 0))
     col_widths = [len(h) for h in headers]
     data = []
