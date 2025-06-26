@@ -93,28 +93,52 @@ Up/Down: Navigate  Enter: Select  v: Toggle view  i: Schema  w: Wrap  s: SQL  q:
 
 ### Schema view
 ```
-Schema: customer_prefixes (encoding: UTF-8)
-CREATE TABLE customer_prefixes (         id INTEGER PRIMARY KEY AUTOINCREMENT,
-customer_id INTEGER NOT NULL,         entity TEXT NOT NULL,         property TEXT NOT
-NULL,         prefix TEXT NOT NULL,         FOREIGN KEY(customer_id) REFERENCES
-customers(id)     )
+Schema: change_log (encoding: UTF-8)
 
-Name         Type     Limit  Not Null  Default  PK  Hidden
-id           INTEGER         NO                 1   NO
-customer_id  INTEGER         YES                    NO
-entity       TEXT            YES                    NO
-property     TEXT            YES                    NO
-prefix       TEXT            YES                    NO
+CREATE TABLE change_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_type TEXT NOT NULL,
+    invoice_id INTEGER,
+    payment_id INTEGER,
+    prev_value TEXT,
+    new_value TEXT,
+    reason TEXT,
+    balance_before REAL,
+    balance_after REAL,
+    user_id INTEGER,
+    ip_address TEXT,
+    FOREIGN KEY(invoice_id) REFERENCES invoices(id),
+    FOREIGN KEY(payment_id) REFERENCES pko_payments(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+)
+
+Name            Type     Limit  Not Null  Default            PK  Hidden
+id              INTEGER         NO                           1
+change_date     TEXT            YES       CURRENT_TIMESTAMP
+event_type      TEXT            YES
+invoice_id      INTEGER         NO
+payment_id      INTEGER         NO
+prev_value      TEXT            NO
+new_value       TEXT            NO
+reason          TEXT            NO
+balance_before  REAL            NO
+balance_after   REAL            NO
+user_id         INTEGER         NO
+ip_address      TEXT            NO
 
 Indices:
 
 Foreign keys:
-  customers(id) <- customer_id on_update=NO ACTION on_delete=NO ACTION
+  users(id) <- user_id on_update=NO ACTION on_delete=NO ACTION
+  pko_payments(id) <- payment_id on_update=NO ACTION on_delete=NO ACTION
+  invoices(id) <- invoice_id on_update=NO ACTION on_delete=NO ACTION
 
-Rows: 34, Size: 4.0KB
+Rows: 51, Size: 4.0KB
+
 Triggers:
 
-Press any key to return
+Up/Down: Scroll  b/q/ESC: Back
 ```
 
 ### Table entries view
